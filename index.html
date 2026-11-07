@@ -1,133 +1,362 @@
-<!doctype html>
+
+<!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MTC Model Front Renderer</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MTC 正面レンダラー</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#101318;color:#eef2f7;font-family:system-ui,-apple-system,sans-serif}
-header{padding:14px 16px;background:#1b222c;font-weight:700}main{padding:14px;max-width:900px;margin:auto}
-.panel{background:#1b222c;border:1px solid #303b49;border-radius:12px;padding:14px;margin-bottom:12px}
-label{display:block;font-size:14px;margin:8px 0 5px;color:#c7d0dc}
-input{width:100%;padding:10px;background:#111820;color:#fff;border:1px solid #465466;border-radius:8px}
-button{border:0;border-radius:9px;background:#4b83e6;color:white;padding:12px 16px;font-weight:700;width:100%;margin-top:12px}
-#view{width:100%;height:min(65vh,560px);display:block;background:#dce3ea;border-radius:10px}
-small{color:#aab6c5;line-height:1.6;display:block;margin-top:8px}
-#status{font-size:13px;color:#b9c8d9;margin-top:8px}
+*{box-sizing:border-box}
+body{
+ margin:0;background:#10151d;color:white;
+ font-family:system-ui,sans-serif;
+}
+header{
+ padding:16px;background:#1c2633;
+ font-size:19px;font-weight:bold;
+}
+main{padding:14px;max-width:900px;margin:auto}
+.panel{
+ background:#1c2633;padding:14px;
+ border-radius:14px;margin-bottom:14px;
+}
+label{display:block;margin:12px 0 6px}
+input{
+ width:100%;padding:11px;
+ background:#101820;color:white;
+ border:1px solid #536477;border-radius:8px;
+}
+button{
+ width:100%;padding:14px;margin-top:12px;
+ border:0;border-radius:10px;
+ background:#4b83e6;color:white;
+ font-weight:bold;font-size:15px;
+}
+canvas{
+ display:block;width:100%;height:65vh;
+ min-height:350px;background:#dce3ea;
+ border-radius:10px;
+}
+#status{font-size:13px;margin-top:10px;color:#c5d3e3}
 </style>
 </head>
 <body>
-<header>MTC 車両モデル・正面レンダラー</header>
+<header>MTC 車両正面レンダラー</header>
 <main>
 <div class="panel">
-<label>Bedrock geometry JSON</label><input id="json" type="file" accept=".json,application/json">
-<label>テクスチャ PNG</label><input id="png" type="file" accept="image/png">
-<button id="draw">モデルを読み込んで正面描画</button>
-<div id="status">JSONとPNGを選択してください。</div>
-<small>アニメーションなし。車両の先頭側（Zマイナス方向）から正面を描画します。画像は下のキャンバスを長押し／右クリックで保存できます。</small>
+ <label>モデル JSON</label>
+ <input id="json" type="file" accept=".json,application/json">
+ <label>テクスチャ PNG</label>
+ <input id="png" type="file" accept="image/png">
+ <button id="draw">モデルを読み込んで正面描画</button>
+ <div id="status">JSONとPNGを選択してください。</div>
 </div>
-<div class="panel"><canvas id="view"></canvas><button id="save">正面画像をPNG保存</button></div>
-</main>
-<script type="module">
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 
-const $=id=>document.getElementById(id), canvas=$('view');
-let renderer, scene, camera;
-function setStatus(s){$('status').textContent=s}
-function rad(v){return v*Math.PI/180}
-function uvRect(face, tw, th){
-  if(!face || !face.uv || !face.uv_size) return null;
-  const [u,v]=face.uv,[w,h]=face.uv_size;
-  return [u/tw,1-v/th, (u+w)/tw,1-(v+h)/th];
+<div class="panel">
+ <canvas id="view"></canvas>
+ <button id="save">正面画像をPNG保存</button>
+</div>
+</main>
+
+<script type="module">
+import * as THREE from
+'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+
+const $=id=>document.getElementById(id);
+const canvas=$('view');
+
+function status(t){
+ $('status').textContent=t;
 }
-function buildCube(cube,boneGroup,texture,tw,th,bonePivot){
-  let [sx,sy,sz]=cube.size;
-  const eps=0.001;
-  const geom=new THREE.BoxGeometry(Math.max(sx,eps),Math.max(sy,eps),Math.max(sz,eps));
-  const pos=cube.origin.map((v,i)=>v+cube.size[i]/2);
-  const faces=['east','west','up','down','south','north'];
-  const groups=geom.groups;
-  const uv=geom.attributes.uv;
-  // BoxGeometry groups correspond to +X,-X,+Y,-Y,+Z,-Z
-  faces.forEach((name,idx)=>{
-    const rect=uvRect(cube.uv?.[name],tw,th);
-    if(!rect) return;
-    const group=groups[idx]; if(!group) return;
-    const [u0,v0,u1,v1]=rect;
-    for(let j=group.start;j<group.start+group.count;j++){
-      const oldU=uv.getX(j), oldV=uv.getY(j);
-      uv.setXY(j,u0+(u1-u0)*oldU,v1+(v0-v1)*oldV);
-    }
-  });
-  uv.needsUpdate=true;
-  const mat=new THREE.MeshBasicMaterial({map:texture,transparent:true,side:THREE.DoubleSide});
-  const mesh=new THREE.Mesh(geom,mat);
-  const bp=bonePivot||[0,0,0];
-  mesh.position.set(pos[0]-bp[0],pos[1]-bp[1],pos[2]-bp[2]);
-  if(cube.pivot){
-    const p=cube.pivot;
-    const wrapper=new THREE.Group(); wrapper.position.set(p[0]-bp[0],p[1]-bp[1],p[2]-bp[2]);
-    mesh.position.set(pos[0]-p[0],pos[1]-p[1],pos[2]-p[2]);
-    if(cube.rotation) wrapper.rotation.set(...cube.rotation.map(rad),'ZYX');
-    wrapper.add(mesh); boneGroup.add(wrapper);
-  }else boneGroup.add(mesh);
+
+function rad(v){
+ return v*Math.PI/180;
 }
-function loadModel(data,texture){
-  const geo=data['minecraft:geometry']?.[0]; if(!geo) throw Error('minecraft:geometry が見つかりません');
-  const tw=geo.description.texture_width||texture.image.width, th=geo.description.texture_height||texture.image.height;
-  const root=new THREE.Group(), map=new Map();
-  for(const b of geo.bones){
-    const group=new THREE.Group(); group.name=b.name;
-    const pivot=b.pivot||[0,0,0]; group.userData.pivot=pivot;
-    if(b.rotation) group.rotation.set(...b.rotation.map(rad),'ZYX');
-    map.set(b.name,{group,b});
+
+/* 面ごとに独立した頂点とUVを作成 */
+function makeCube(cube,texture,tw,th,bonePivot){
+ const origin=cube.origin;
+ const size=cube.size;
+
+ const x0=origin[0], y0=origin[1], z0=origin[2];
+ const x1=x0+size[0], y1=y0+size[1], z1=z0+size[2];
+
+ const faces={
+  east:[
+   [x1,y0,z0],[x1,y0,z1],[x1,y1,z1],[x1,y1,z0]
+  ],
+  west:[
+   [x0,y0,z1],[x0,y0,z0],[x0,y1,z0],[x0,y1,z1]
+  ],
+  up:[
+   [x0,y1,z1],[x1,y1,z1],[x1,y1,z0],[x0,y1,z0]
+  ],
+  down:[
+   [x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1]
+  ],
+  south:[
+   [x1,y0,z1],[x0,y0,z1],[x0,y1,z1],[x1,y1,z1]
+  ],
+  north:[
+   [x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0]
+  ]
+ };
+
+ const positions=[];
+ const uvs=[];
+ const indices=[];
+
+ for(const [name,verts] of Object.entries(faces)){
+  const f=cube.uv?.[name];
+  if(!f) continue;
+
+  const uv=f.uv;
+  const us=f.uv_size;
+
+  const u0=uv[0]/tw;
+  const u1=(uv[0]+us[0])/tw;
+  const v0=1-uv[1]/th;
+  const v1=1-(uv[1]+us[1])/th;
+
+  const uvList=[
+   [u0,v1],[u1,v1],[u1,v0],[u0,v0]
+  ];
+
+  const base=positions.length/3;
+
+  for(let i=0;i<4;i++){
+   positions.push(...verts[i]);
+   uvs.push(...uvList[i]);
   }
-  for(const b of geo.bones){
-    const item=map.get(b.name);
-    if(b.parent && map.has(b.parent)) {
-      const parent=map.get(b.parent).group, pp=parent.userData.pivot||[0,0,0], cp=item.group.userData.pivot||[0,0,0];
-      item.group.position.set(cp[0]-pp[0],cp[1]-pp[1],cp[2]-pp[2]); parent.add(item.group);
-    } else { const cp=item.group.userData.pivot||[0,0,0]; item.group.position.set(...cp); root.add(item.group); }
-    for(const cube of b.cubes||[]) buildCube(cube,item.group,texture,tw,th,item.group.userData.pivot);
+
+  indices.push(
+   base,base+1,base+2,
+   base,base+2,base+3
+  );
+ }
+
+ const geometry=new THREE.BufferGeometry();
+ geometry.setAttribute(
+  'position',
+  new THREE.Float32BufferAttribute(positions,3)
+ );
+ geometry.setAttribute(
+  'uv',
+  new THREE.Float32BufferAttribute(uvs,2)
+ );
+ geometry.setIndex(indices);
+ geometry.computeVertexNormals();
+
+ const material=new THREE.MeshBasicMaterial({
+  map:texture,
+  transparent:true,
+  side:THREE.DoubleSide,
+  alphaTest:0.01
+ });
+
+ const mesh=new THREE.Mesh(geometry,material);
+
+ const bp=bonePivot||[0,0,0];
+ const cp=cube.pivot||bp;
+
+ const wrapper=new THREE.Group();
+ wrapper.position.set(
+  cp[0]-bp[0],
+  cp[1]-bp[1],
+  cp[2]-bp[2]
+ );
+
+ if(cube.rotation){
+  wrapper.rotation.set(
+   rad(cube.rotation[0]),
+   rad(cube.rotation[1]),
+   rad(cube.rotation[2]),
+   'ZYX'
+  );
+ }
+
+ mesh.position.set(
+  (x0+x1)/2-cp[0],
+  (y0+y1)/2-cp[1],
+  (z0+z1)/2-cp[2]
+ );
+
+ wrapper.add(mesh);
+ return wrapper;
+}
+
+/* Bedrockボーン構造 */
+function createModel(data,texture){
+ const geo=data['minecraft:geometry']?.[0];
+ if(!geo) throw Error('geometryが見つかりません');
+
+ const tw=geo.description.texture_width||texture.image.width;
+ const th=geo.description.texture_height||texture.image.height;
+
+ const root=new THREE.Group();
+ const map=new Map();
+
+ for(const bone of geo.bones){
+  const group=new THREE.Group();
+  group.name=bone.name;
+
+  const pivot=bone.pivot||[0,0,0];
+  group.userData.pivot=pivot;
+
+  if(bone.rotation){
+   group.rotation.set(
+    rad(bone.rotation[0]),
+    rad(bone.rotation[1]),
+    rad(bone.rotation[2]),
+    'ZYX'
+   );
   }
-  return {root,desc:geo.description};
+
+  map.set(bone.name,{group,bone});
+ }
+
+ for(const bone of geo.bones){
+  const item=map.get(bone.name);
+  const group=item.group;
+  const pivot=group.userData.pivot;
+
+  if(bone.parent && map.has(bone.parent)){
+   const parent=map.get(bone.parent).group;
+   const pp=parent.userData.pivot;
+
+   group.position.set(
+    pivot[0]-pp[0],
+    pivot[1]-pp[1],
+    pivot[2]-pp[2]
+   );
+
+   parent.add(group);
+  }else{
+   group.position.set(...pivot);
+   root.add(group);
+  }
+
+  for(const cube of bone.cubes||[]){
+   group.add(makeCube(cube,texture,tw,th,pivot));
+  }
+ }
+
+ return {root,description:geo.description};
 }
-function renderFront(root,desc){
-  if(renderer) renderer.dispose();
-  renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:false,preserveDrawingBuffer:true});
-  const w=Math.max(320,canvas.clientWidth),h=Math.max(300,canvas.clientHeight);
-  renderer.setPixelRatio(Math.min(devicePixelRatio||1,2)); renderer.setSize(w,h,false);
-  renderer.setClearColor(0xe2e8ef,1);
-  scene=new THREE.Scene(); scene.background=new THREE.Color(0xe2e8ef);
-  scene.add(root);
-  root.updateMatrixWorld(true);
-  const box=new THREE.Box3().setFromObject(root);
-  if(box.isEmpty()) throw Error('モデルに表示できる立体がありません');
-  const center=box.getCenter(new THREE.Vector3()), size=box.getSize(new THREE.Vector3());
-  // 車両の先頭はZマイナス側。正面を向くカメラ。
-  const depth=Math.max(size.x,size.y)*2.2+100;
-  camera=new THREE.OrthographicCamera(-1,1,1,-1,1,depth*4);
-  camera.position.set(center.x,center.y,box.min.z-depth);
-  camera.up.set(0,1,0); camera.lookAt(center.x,center.y,center.z);
-  const aspect=w/h, viewH=Math.max(size.y*1.18,size.x/aspect*1.18);
-  camera.left=-viewH*aspect/2;camera.right=viewH*aspect/2;
-  camera.top=viewH/2;camera.bottom=-viewH/2;camera.near=.1;camera.far=depth*5;camera.updateProjectionMatrix();
-  renderer.render(scene,camera);
+
+/* 正面から描画 */
+function renderFront(root,description){
+ const renderer=new THREE.WebGLRenderer({
+  canvas,
+  antialias:true,
+  preserveDrawingBuffer:true
+ });
+
+ renderer.setPixelRatio(Math.min(devicePixelRatio||1,2));
+ renderer.setSize(
+  Math.max(canvas.clientWidth,320),
+  Math.max(canvas.clientHeight,350),
+  false
+ );
+
+ renderer.setClearColor(0xe2e8ef,1);
+
+ const scene=new THREE.Scene();
+ scene.background=new THREE.Color(0xe2e8ef);
+ scene.add(root);
+
+ root.updateMatrixWorld(true);
+
+ const bounds=new THREE.Box3().setFromObject(root);
+
+ if(bounds.isEmpty()){
+  throw Error('モデルが空です');
+ }
+
+ const center=bounds.getCenter(new THREE.Vector3());
+ const size=bounds.getSize(new THREE.Vector3());
+
+ /* 車両のZマイナス側を正面として撮影 */
+ const distance=Math.max(size.x,size.y,size.z)*2+100;
+
+ const camera=new THREE.OrthographicCamera(
+  -1,1,1,-1,0.1,distance*5
+ );
+
+ camera.position.set(
+  center.x,
+  center.y,
+  bounds.min.z-distance
+ );
+
+ camera.up.set(0,1,0);
+ camera.lookAt(center);
+
+ const width=Math.max(canvas.clientWidth,320);
+ const height=Math.max(canvas.clientHeight,350);
+ const aspect=width/height;
+
+ const viewHeight=Math.max(
+  size.y*1.15,
+  size.x/aspect*1.15
+ );
+
+ camera.left=-viewHeight*aspect/2;
+ camera.right=viewHeight*aspect/2;
+ camera.top=viewHeight/2;
+ camera.bottom=-viewHeight/2;
+ camera.updateProjectionMatrix();
+
+ renderer.render(scene,camera);
 }
+
+/* 読み込み */
 $('draw').addEventListener('click',async()=>{
  try{
-  const jf=$('json').files[0],pf=$('png').files[0];
-  if(!jf||!pf) throw Error('JSONとPNGの両方を選択してください');
-  setStatus('読み込み中…');
+  const jf=$('json').files[0];
+  const pf=$('png').files[0];
+
+  if(!jf||!pf){
+   throw Error('JSONとPNGを選択してください');
+  }
+
+  status('読み込み中...');
+
   const data=JSON.parse(await jf.text());
   const bitmap=await createImageBitmap(pf);
-  const tex=new THREE.CanvasTexture(bitmap);tex.colorSpace=THREE.SRGBColorSpace;tex.magFilter=THREE.NearestFilter;tex.minFilter=THREE.NearestFilter;tex.flipY=false;
-  const {root,desc}=loadModel(data,tex);
-  renderFront(root,desc);
-  setStatus(`描画完了：${desc.identifier||'Bedrock model'} / ボーン ${data['minecraft:geometry'][0].bones.length}個`);
- }catch(e){setStatus('エラー：'+e.message);console.error(e)}
+
+  const texture=new THREE.CanvasTexture(bitmap);
+  texture.colorSpace=THREE.SRGBColorSpace;
+  texture.magFilter=THREE.NearestFilter;
+  texture.minFilter=THREE.LinearMipmapLinearFilter;
+  texture.generateMipmaps=true;
+
+  const model=createModel(data,texture);
+
+  renderFront(model.root,model.description);
+
+  status(
+   '描画完了：'+
+   model.description.identifier
+  );
+
+ }catch(e){
+  console.error(e);
+  status('エラー：'+e.message);
+ }
 });
+
+/* PNG保存 */
 $('save').addEventListener('click',()=>{
- try{const a=document.createElement('a');a.download='MTC_front.png';a.href=canvas.toDataURL('image/png');a.click()}catch(e){setStatus('保存できません：'+e.message)}
+ try{
+  const a=document.createElement('a');
+  a.download='MTC_front.png';
+  a.href=canvas.toDataURL('image/png');
+  a.click();
+ }catch(e){
+  status('保存エラー：'+e.message);
+ }
 });
 </script>
-</body></html>
+</body>
+</html>
