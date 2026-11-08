@@ -1,424 +1,91 @@
-
 <!doctype html>
 <html lang="ja">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MTC 3D Front Renderer</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MTC 3D Model Viewer</title>
 <style>
-*{box-sizing:border-box}
-body{margin:0;background:#10151d;color:#fff;font-family:system-ui,sans-serif}
-header{padding:16px;background:#1c2633;font-weight:700;font-size:19px}
-main{max-width:1000px;margin:auto;padding:14px}
-.panel{background:#1c2633;padding:14px;border-radius:14px;margin-bottom:14px}
-label{display:block;margin:12px 0 6px}
-input{width:100%;padding:10px;background:#101820;color:#fff;border:1px solid #536477;border-radius:8px}
-button{width:100%;padding:13px;margin-top:12px;border:0;border-radius:10px;background:#4b83e6;color:#fff;font-weight:700}
-.views{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.viewbox{min-width:0}
-.viewbox b{display:block;text-align:center;margin:4px 0 8px}
-canvas{display:block;width:100%;height:360px;background:#dce3ea;border-radius:10px}
-#status{font-size:13px;color:#c5d3e3;margin-top:10px}
-@media(max-width:600px){
- .views{grid-template-columns:1fr}
- canvas{height:340px}
-}
+*{box-sizing:border-box}body{margin:0;background:#10151d;color:#f4f6fa;font-family:system-ui,sans-serif}header{padding:15px 18px;background:#1c2633;font-weight:700;font-size:19px}main{max-width:1000px;margin:auto;padding:14px}.panel{background:#1c2633;padding:14px;border-radius:13px;margin-bottom:14px}label{display:block;margin:10px 0 6px}input{width:100%;padding:10px;border-radius:8px;border:1px solid #526174;background:#101820;color:white}button{width:100%;padding:13px;margin-top:12px;border:0;border-radius:9px;background:#4b83e6;color:white;font-weight:700}#viewer{width:100%;height:65vh;min-height:380px;background:#dce3ea;border-radius:10px;overflow:hidden}#status{font-size:13px;color:#c7d2e0;margin-top:10px}small{color:#aebaca}
 </style>
 </head>
 <body>
-<header>MTC 車両3D 正面レンダラー</header>
+<header>MTC 車両 3Dモデルビューア</header>
 <main>
 <div class="panel">
-<label>Bedrock Geometry JSON</label>
-<input id="json" type="file" accept=".json,application/json">
-<label>テクスチャ PNG</label>
-<input id="png" type="file" accept="image/png">
-<button id="draw">3Dモデルを生成して両側から描画</button>
+<label>Geometry JSON</label><input id="json" type="file" accept=".json,application/json">
+<label>Texture PNG</label><input id="png" type="file" accept="image/png">
+<button id="load">3Dモデルを表示</button>
 <div id="status">JSONとPNGを選択してください。</div>
+<small>表示後はドラッグで回転、ピンチ／ホイールで拡大縮小できます。</small>
 </div>
-<div class="panel">
-<div class="views">
-<div class="viewbox">
-<b>Zマイナス側から</b>
-<canvas id="minus"></canvas>
-<button id="saveMinus">こちらをPNG保存</button>
-</div>
-<div class="viewbox">
-<b>Zプラス側から</b>
-<canvas id="plus"></canvas>
-<button id="savePlus">こちらをPNG保存</button>
-</div>
-</div>
-</div>
+<div class="panel"><div id="viewer"></div></div>
 </main>
-
 <script type="module">
-import * as THREE from
-"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
-
-const $=id=>document.getElementById(id);
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+import {OrbitControls} from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+const $=id=>document.getElementById(id);let renderer,scene,camera,controls,modelRoot;
+const say=s=>$('status').textContent=s;
 const rad=n=>n*Math.PI/180;
-
-function status(s){
- $("status").textContent=s;
+function euler(obj,r){if(!r)return;obj.rotation.order='XYZ';obj.rotation.set(rad(r[0]),rad(r[1]),rad(r[2]));}
+function uvPoints(face,defaultSize,tw,th){
+ const p=face.uv||[0,0],sz=face.uv_size||defaultSize;
+ let a=[[p[0],p[1]],[p[0]+sz[0],p[1]],[p[0]+sz[0],p[1]+sz[1]],[p[0],p[1]+sz[1]]];
+ const turns=(((face.uv_rotation||0)/90)%4+4)%4;
+ for(let n=0;n<turns;n++)a=[a[3],a[0],a[1],a[2]];
+ return a.map(v=>[v[0]/tw,1-v[1]/th]);
 }
-
-function rotation(o,r){
- if(r)o.rotation.set(
-  rad(r[0]),rad(r[1]),rad(r[2]),"XYZ"
- );
-}
-
-function vec(a){
- return new THREE.Vector3(
-  a[0]||0,a[1]||0,a[2]||0
- );
-}
-
-/* 各面の頂点を定義 */
-function faceDefs(x0,y0,z0,x1,y1,z1){
- return {
-  north:[[x0,y1,z0],[x1,y1,z0],[x1,y0,z0],[x0,y0,z0]],
-  south:[[x1,y1,z1],[x0,y1,z1],[x0,y0,z1],[x1,y0,z1]],
-  east:[[x1,y1,z1],[x1,y1,z0],[x1,y0,z0],[x1,y0,z1]],
-  west:[[x0,y1,z0],[x0,y1,z1],[x0,y0,z1],[x0,y0,z0]],
-  up:[[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]],
-  down:[[x1,y0,z0],[x0,y0,z0],[x0,y0,z1],[x1,y0,z1]]
- };
-}
-
-function faceSize(name,s){
- if(name==="north"||name==="south")
-  return [s[0],s[1]];
- if(name==="east"||name==="west")
-  return [s[2],s[1]];
- return [s[0],s[2]];
-}
-
-/* UV座標とUV回転 */
-function uvCorners(face,defaultSize,tw,th){
- const uv=face.uv||[0,0];
- const us=face.uv_size||defaultSize;
-
- const u=uv[0],v=uv[1];
- const w=us[0],h=us[1];
-
- let a=[
-  [u,v],
-  [u+w,v],
-  [u+w,v+h],
-  [u,v+h]
- ];
-
- const turns=(
-  ((face.uv_rotation||0)/90)%4+4
- )%4;
-
- for(let k=0;k<turns;k++){
-  a=[a[3],a[0],a[1],a[2]];
+function faceVertices(x0,y0,z0,x1,y1,z1){return {
+ north:[[x0,y1,z0],[x1,y1,z0],[x1,y0,z0],[x0,y0,z0]],
+ south:[[x1,y1,z1],[x0,y1,z1],[x0,y0,z1],[x1,y0,z1]],
+ east:[[x1,y1,z0],[x1,y1,z1],[x1,y0,z1],[x1,y0,z0]],
+ west:[[x0,y1,z1],[x0,y1,z0],[x0,y0,z0],[x0,y0,z1]],
+ up:[[x0,y1,z0],[x1,y1,z0],[x1,y1,z1],[x0,y1,z1]],
+ down:[[x1,y0,z0],[x0,y0,z0],[x0,y0,z1],[x1,y0,z1]]
+};}
+function faceDims(name,s){if(name==='north'||name==='south')return [s[0],s[1]];if(name==='east'||name==='west')return [s[2],s[1]];return [s[0],s[2]];}
+function makeCube(c,tw,th,bonePivot,material){
+ const o=c.origin,s=c.size,inf=c.inflate||0;
+ const x0=o[0]-inf,y0=o[1]-inf,z0=o[2]-inf,x1=o[0]+s[0]+inf,y1=o[1]+s[1]+inf,z1=o[2]+s[2]+inf;
+ const verts=faceVertices(x0,y0,z0,x1,y1,z1),pos=[],uvs=[],idx=[];
+ for(const name of ['north','south','east','west','up','down']){
+  const f=c.uv?.[name];if(!f)continue;
+  const v=verts[name],dim=faceDims(name,[x1-x0,y1-y0,z1-z0]);
+  // Skip only truly degenerate faces; zero-thickness planes still retain their two broad faces.
+  const area=(name==='north'||name==='south')?dim[0]*dim[1]:(name==='east'||name==='west')?dim[0]*dim[1]:dim[0]*dim[1];
+  if(Math.abs(area)<1e-10)continue;
+  const tex=uvPoints(f,dim,tw,th),base=pos.length/3;
+  for(let i=0;i<4;i++){pos.push(...v[i]);uvs.push(...tex[i]);}
+  idx.push(base,base+1,base+2,base,base+2,base+3);
  }
-
- return a.map(p=>[
-  p[0]/tw,
-  1-p[1]/th
- ]);
-}
-
-/* キューブ生成 */
-function makeCube(cube,tw,th,bonePivot,texture,material){
- const o=cube.origin;
- const s=cube.size;
- const inf=cube.inflate||0;
-
- const x0=o[0]-inf;
- const y0=o[1]-inf;
- const z0=o[2]-inf;
- const x1=o[0]+s[0]+inf;
- const y1=o[1]+s[1]+inf;
- const z1=o[2]+s[2]+inf;
-
- const dims=[x1-x0,y1-y0,z1-z0];
- const defs=faceDefs(x0,y0,z0,x1,y1,z1);
-
- const positions=[];
- const uvs=[];
- const indices=[];
-
- const faceNames=[
-  "north","south","east","west","up","down"
- ];
-
- for(const name of faceNames){
-  const f=cube.uv?.[name];
-  if(!f)continue;
-
-  const verts=defs[name];
-  const defaultUV=faceSize(name,dims);
-  const coords=uvCorners(f,defaultUV,tw,th);
-
-  const base=positions.length/3;
-
-  for(let i=0;i<4;i++){
-   positions.push(...verts[i]);
-   uvs.push(...coords[i]);
-  }
-
-  indices.push(
-   base,base+1,base+2,
-   base,base+2,base+3
-  );
- }
-
- const geo=new THREE.BufferGeometry();
-
- geo.setAttribute(
-  "position",
-  new THREE.Float32BufferAttribute(positions,3)
- );
-
- geo.setAttribute(
-  "uv",
-  new THREE.Float32BufferAttribute(uvs,2)
- );
-
- geo.setIndex(indices);
- geo.computeVertexNormals();
-
+ const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));geo.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));geo.setIndex(idx);geo.computeVertexNormals();
  const mesh=new THREE.Mesh(geo,material);
-
- const bp=vec(bonePivot);
-
- const cp=cube.pivot
-  ?vec(cube.pivot)
-  :vec(o).add(vec(s).multiplyScalar(.5));
-
- const cubeCenter=vec(o).add(
-  vec(s).multiplyScalar(.5)
- );
-
- const wrap=new THREE.Group();
-
- wrap.position.copy(cp.clone().sub(bp));
- rotation(wrap,cube.rotation);
-
- mesh.position.copy(cubeCenter.sub(cp));
-
- wrap.add(mesh);
-
- return wrap;
+ const bp=new THREE.Vector3(...bonePivot),cp=c.pivot?new THREE.Vector3(...c.pivot):new THREE.Vector3(o[0]+s[0]/2,o[1]+s[1]/2,o[2]+s[2]/2);
+ const center=new THREE.Vector3(o[0]+s[0]/2,o[1]+s[1]/2,o[2]+s[2]/2);
+ const g=new THREE.Group();g.position.copy(cp.clone().sub(bp));euler(g,c.rotation);mesh.position.copy(center.sub(cp));g.add(mesh);return g;
 }
-
-/* Bedrockボーンと親子関係 */
-function createModel(data,texture){
- const gd=data["minecraft:geometry"]?.[0];
-
- if(!gd)throw Error("minecraft:geometry がありません");
-
- const desc=gd.description;
-
- const tw=desc.texture_width||texture.image.width;
- const th=desc.texture_height||texture.image.height;
-
- const root=new THREE.Group();
- const map=new Map();
-
- const mat=new THREE.MeshBasicMaterial({
-  map:texture,
-  transparent:true,
-  alphaTest:.001,
-  side:THREE.DoubleSide
- });
-
- /* ボーンを先に作成 */
- for(const b of gd.bones){
-  const g=new THREE.Group();
-  g.name=b.name;
-  g.userData.pivot=vec(b.pivot||[0,0,0]);
-
-  rotation(g,b.rotation);
-
-  map.set(b.name,{g,b});
- }
-
- /* 親子関係 */
- for(const b of gd.bones){
-  const item=map.get(b.name);
-  const g=item.g;
-  const p=g.userData.pivot;
-
-  if(b.parent&&map.has(b.parent)){
-   const pg=map.get(b.parent).g;
-
-   g.position.copy(
-    p.clone().sub(pg.userData.pivot)
-   );
-
-   pg.add(g);
-  }else{
-   g.position.copy(p);
-   root.add(g);
-  }
- }
-
- /* キューブを追加 */
- let count=0;
-
- for(const b of gd.bones){
-  const g=map.get(b.name).g;
-  const p=g.userData.pivot.toArray();
-
-  for(const c of b.cubes||[]){
-   g.add(makeCube(
-    c,tw,th,p,texture,mat
-   ));
-   count++;
-  }
- }
-
- root.updateMatrixWorld(true);
-
- return {
-  root,
-  desc,
-  bones:gd.bones.length,
-  cubes:count
- };
+function build(data,texture){
+ const gd=data['minecraft:geometry']?.[0];if(!gd)throw Error('minecraft:geometry が見つかりません');
+ const tw=gd.description.texture_width||texture.image.width,th=gd.description.texture_height||texture.image.height;
+ const material=new THREE.MeshBasicMaterial({map:texture,transparent:true,alphaTest:0.001,side:THREE.DoubleSide});
+ const root=new THREE.Group(),map=new Map();
+ for(const b of gd.bones){const g=new THREE.Group();g.name=b.name;g.userData.pivot=new THREE.Vector3(...(b.pivot||[0,0,0]));euler(g,b.rotation);map.set(b.name,{g,b});}
+ for(const b of gd.bones){const item=map.get(b.name),g=item.g,p=g.userData.pivot;if(b.parent&&map.has(b.parent)){const pg=map.get(b.parent).g;g.position.copy(p.clone().sub(pg.userData.pivot));pg.add(g);}else{g.position.copy(p);root.add(g);}}
+ let cubes=0;for(const b of gd.bones){const g=map.get(b.name).g,p=g.userData.pivot.toArray();for(const c of b.cubes||[]){g.add(makeCube(c,tw,th,p,material));cubes++;}}
+ root.updateMatrixWorld(true);return {root,bones:gd.bones.length,cubes,id:gd.description.identifier};
 }
-
-/* 指定方向から正投影で描画 */
-function drawView(canvas,model,side){
- const w=Math.max(canvas.clientWidth,280);
- const h=Math.max(canvas.clientHeight,300);
-
- const r=new THREE.WebGLRenderer({
-  canvas,
-  antialias:true,
-  preserveDrawingBuffer:true
- });
-
- r.setPixelRatio(
-  Math.min(devicePixelRatio||1,2)
- );
-
- r.setSize(w,h,false);
- r.setClearColor(0xe2e8ef,1);
-
- const scene=new THREE.Scene();
- scene.background=new THREE.Color(0xe2e8ef);
-
- const obj=model.root.clone(true);
- scene.add(obj);
- obj.updateMatrixWorld(true);
-
- const box=new THREE.Box3().setFromObject(obj);
-
- if(box.isEmpty())
-  throw Error("モデル形状がありません");
-
- const c=box.getCenter(new THREE.Vector3());
- const s=box.getSize(new THREE.Vector3());
-
- const dist=Math.max(s.x,s.y,s.z)*2+100;
-
- const cam=new THREE.OrthographicCamera(
-  -1,1,1,-1,.1,dist*5
- );
-
- cam.position.set(
-  c.x,
-  c.y,
-  side<0
-   ?box.min.z-dist
-   :box.max.z+dist
- );
-
- cam.up.set(0,1,0);
- cam.lookAt(c);
-
- const aspect=w/h;
-
- const viewH=Math.max(
-  s.y*1.12,
-  s.x/aspect*1.12,
-  1
- );
-
- cam.left=-viewH*aspect/2;
- cam.right=viewH*aspect/2;
- cam.top=viewH/2;
- cam.bottom=-viewH/2;
-
- cam.updateProjectionMatrix();
-
- r.render(scene,cam);
-
- return r;
+function setupViewer(){
+ const host=$('viewer');if(renderer){renderer.dispose();host.innerHTML='';}
+ scene=new THREE.Scene();scene.background=new THREE.Color(0xdce3ea);
+ const w=host.clientWidth,h=host.clientHeight;
+ camera=new THREE.PerspectiveCamera(38,w/h,0.1,10000);
+ renderer=new THREE.WebGLRenderer({antialias:true,alpha:false});renderer.setPixelRatio(Math.min(devicePixelRatio||1,2));renderer.setSize(w,h);host.appendChild(renderer.domElement);
+ controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.dampingFactor=.07;
+ scene.add(new THREE.HemisphereLight(0xffffff,0x8b96a5,2));
+ const light=new THREE.DirectionalLight(0xffffff,1.2);light.position.set(200,300,400);scene.add(light);
 }
-
-/* 読み込み */
-$("draw").addEventListener("click",async()=>{
- try{
-  const jf=$("json").files[0];
-  const pf=$("png").files[0];
-
-  if(!jf||!pf)
-   throw Error("JSONとPNGを両方選択してください");
-
-  status("JSONを解析中...");
-
-  const data=JSON.parse(await jf.text());
-  const bitmap=await createImageBitmap(pf);
-
-  const tex=new THREE.CanvasTexture(bitmap);
-
-  tex.colorSpace=THREE.SRGBColorSpace;
-  tex.flipY=true;
-  tex.magFilter=THREE.NearestFilter;
-  tex.minFilter=THREE.LinearMipmapLinearFilter;
-  tex.generateMipmaps=true;
-
-  status("3Dモデルを構築中...");
-
-  const model=createModel(data,tex);
-
-  status("Zマイナス側を描画中...");
-
-  drawView($("minus"),model,-1);
-
-  status("Zプラス側を描画中...");
-
-  drawView($("plus"),model,1);
-
-  status(
-   `完了：${model.desc.identifier||"model"} / ボーン ${model.bones} / キューブ ${model.cubes}`
-  );
-
- }catch(e){
-  console.error(e);
-  status("エラー："+e.message);
- }
-});
-
-/* PNG保存 */
-function save(id,name){
- try{
-  const a=document.createElement("a");
-  a.download=name;
-  a.href=$(id).toDataURL("image/png");
-  a.click();
- }catch(e){
-  status("保存エラー："+e.message);
- }
-}
-
-$("saveMinus").onclick=()=>save(
- "minus","MTC_front_minusZ.png"
-);
-
-$("savePlus").onclick=()=>save(
- "plus","MTC_front_plusZ.png"
-);
-
+function fit(){modelRoot.updateMatrixWorld(true);const box=new THREE.Box3().setFromObject(modelRoot);if(box.isEmpty())throw Error('モデルの形状がありません');const center=box.getCenter(new THREE.Vector3()),size=box.getSize(new THREE.Vector3());const max=Math.max(size.x,size.y,size.z);controls.target.copy(center);camera.position.set(center.x+max*.9,center.y+max*.45,center.z+max*1.35);camera.near=Math.max(.01,max/1000);camera.far=max*20;camera.updateProjectionMatrix();controls.update();}
+let animationId;function animate(){animationId=requestAnimationFrame(animate);if(controls)controls.update();if(renderer&&scene&&camera)renderer.render(scene,camera);}
+$('load').addEventListener('click',async()=>{try{const jf=$('json').files[0],pf=$('png').files[0];if(!jf||!pf)throw Error('JSONとPNGを両方選択してください');say('ファイルを読み込み中...');const data=JSON.parse(await jf.text());const bitmap=await createImageBitmap(pf);const texture=new THREE.CanvasTexture(bitmap);texture.colorSpace=THREE.SRGBColorSpace;texture.flipY=true;texture.magFilter=THREE.NearestFilter;texture.minFilter=THREE.LinearMipmapLinearFilter;texture.generateMipmaps=true;const built=build(data,texture);if(modelRoot&&scene)scene.remove(modelRoot);setupViewer();modelRoot=built.root;scene.add(modelRoot);fit();if(!animationId)animate();say(`表示中：${built.id} / ボーン ${built.bones} / キューブ ${built.cubes}`);}catch(e){console.error(e);say('エラー：'+e.message);}});
+window.addEventListener('resize',()=>{if(!renderer)return;const host=$('viewer');camera.aspect=host.clientWidth/host.clientHeight;camera.updateProjectionMatrix();renderer.setSize(host.clientWidth,host.clientHeight);});
 </script>
 </body>
 </html>
