@@ -145,12 +145,15 @@ function rad(v){
   return v*Math.PI/180;
 }
 
-/* ==================================================
-   元の正常な描画処理：UV変換
-================================================== */
+/* =========================================
+   元の正常なUV処理
+========================================= */
 
 function uvRect(face, tw, th){
-  if(!face || !face.uv || !face.uv_size) return null;
+
+  if(!face || !face.uv || !face.uv_size) {
+    return null;
+  }
 
   const [u,v]=face.uv;
   const [w,h]=face.uv_size;
@@ -163,11 +166,18 @@ function uvRect(face, tw, th){
   ];
 }
 
-/* ==================================================
-   元の正常な描画処理：キューブ生成
-================================================== */
+/* =========================================
+   元の正常なキューブ生成処理
+========================================= */
 
-function buildCube(cube,boneGroup,texture,tw,th,bonePivot){
+function buildCube(
+  cube,
+  boneGroup,
+  texture,
+  tw,
+  th,
+  bonePivot
+){
 
   let [sx,sy,sz]=cube.size;
 
@@ -195,7 +205,7 @@ function buildCube(cube,boneGroup,texture,tw,th,bonePivot){
   const groups=geom.groups;
   const uv=geom.attributes.uv;
 
-  // BoxGeometry groups correspond to +X,-X,+Y,-Y,+Z,-Z
+  // 元のBoxGeometry面順序をそのまま使用
   faces.forEach((name,idx)=>{
 
     const rect=uvRect(
@@ -221,13 +231,15 @@ function buildCube(cube,boneGroup,texture,tw,th,bonePivot){
       const oldU=uv.getX(j);
       const oldV=uv.getY(j);
 
-      // 元のUV変換処理
+      // 元のUV変換を維持
       uv.setXY(
         j,
         u0+(u1-u0)*oldU,
         v1+(v0-v1)*oldV
       );
+
     }
+
   });
 
   uv.needsUpdate=true;
@@ -267,10 +279,12 @@ function buildCube(cube,boneGroup,texture,tw,th,bonePivot){
     );
 
     if(cube.rotation){
+
       wrapper.rotation.set(
         ...cube.rotation.map(rad),
         'ZYX'
       );
+
     }
 
     wrapper.add(mesh);
@@ -281,18 +295,21 @@ function buildCube(cube,boneGroup,texture,tw,th,bonePivot){
     boneGroup.add(mesh);
 
   }
+
 }
 
-/* ==================================================
-   元の正常な描画処理：モデル読み込み
-================================================== */
+/* =========================================
+   元の正常なモデル読み込み処理
+========================================= */
 
 function loadModel(data,texture){
 
   const geo=data['minecraft:geometry']?.[0];
 
   if(!geo){
-    throw Error('minecraft:geometry が見つかりません');
+    throw Error(
+      'minecraft:geometry が見つかりません'
+    );
   }
 
   const tw=
@@ -329,6 +346,7 @@ function loadModel(data,texture){
       group,
       b
     });
+
   }
 
   for(const b of geo.bones){
@@ -372,19 +390,22 @@ function loadModel(data,texture){
       );
 
     }
+
   }
 
   return {
     root,
     desc:geo.description
   };
+
 }
 
-/* ==================================================
-   ここから3D表示用の追加処理
-================================================== */
+/* =========================================
+   3Dカメラ
+   元のrenderFront()を置き換える部分
+========================================= */
 
-function setup3D(root){
+function render3D(root){
 
   if(animationId){
     cancelAnimationFrame(animationId);
@@ -429,7 +450,9 @@ function setup3D(root){
   const box=new THREE.Box3().setFromObject(root);
 
   if(box.isEmpty()){
-    throw Error('モデルに表示できる立体がありません');
+    throw Error(
+      'モデルに表示できる立体がありません'
+    );
   }
 
   const center=box.getCenter(
@@ -440,31 +463,35 @@ function setup3D(root){
     new THREE.Vector3()
   );
 
-  const maxSize=Math.max(
-    size.x,
-    size.y,
-    size.z
+  const sphere=box.getBoundingSphere(
+    new THREE.Sphere()
   );
 
-  const aspect=w/h;
+  const radius=Math.max(sphere.radius,1);
 
   camera=new THREE.PerspectiveCamera(
-    45,
-    aspect,
+    40,
+    w/h,
     0.1,
-    Math.max(10000,maxSize*100)
+    radius*100
   );
 
-  // 最初は車両の先頭側（Zマイナス方向）から表示
-  const fov=THREE.MathUtils.degToRad(camera.fov);
+  // 車両の長さ方向を見渡せる斜め方向から開始
+  const direction=new THREE.Vector3(
+    1.8,
+    1.25,
+    -0.35
+  ).normalize();
 
   const distance=
-    (maxSize/2)/Math.tan(fov/2)*1.8;
+    radius/Math.sin(
+      THREE.MathUtils.degToRad(camera.fov/2)
+    )*1.2;
 
-  camera.position.set(
-    center.x,
-    center.y,
-    center.z-distance
+  camera.position.copy(
+    center.clone().add(
+      direction.multiplyScalar(distance)
+    )
   );
 
   camera.up.set(0,1,0);
@@ -484,17 +511,20 @@ function setup3D(root){
   controls.enableRotate=true;
   controls.enablePan=true;
 
-  controls.minDistance=Math.max(0.1,maxSize*0.01);
-  controls.maxDistance=maxSize*30;
+  controls.minDistance=Math.max(
+    0.1,
+    radius*0.01
+  );
+
+  controls.maxDistance=radius*20;
 
   controls.update();
 
-  return {center,size};
 }
 
-/* ==================================================
+/* =========================================
    描画ループ
-================================================== */
+========================================= */
 
 function animate(){
 
@@ -507,80 +537,95 @@ function animate(){
   if(renderer && scene && camera){
     renderer.render(scene,camera);
   }
+
 }
 
-/* ==================================================
-   JSON・PNG読み込み
-================================================== */
+/* =========================================
+   ファイル読み込み
+========================================= */
 
-$('draw').addEventListener('click',async()=>{
+$('draw').addEventListener(
+  'click',
+  async()=>{
 
-  try{
+    try{
 
-    const jf=$('json').files[0];
-    const pf=$('png').files[0];
+      const jf=$('json').files[0];
+      const pf=$('png').files[0];
 
-    if(!jf||!pf){
-      throw Error(
-        'JSONとPNGの両方を選択してください'
+      if(!jf||!pf){
+
+        throw Error(
+          'JSONとPNGの両方を選択してください'
+        );
+
+      }
+
+      setStatus('読み込み中…');
+
+      const data=JSON.parse(
+        await jf.text()
       );
+
+      const bitmap=await createImageBitmap(pf);
+
+      // 元の正常なテクスチャ設定を維持
+      const tex=new THREE.CanvasTexture(bitmap);
+
+      tex.colorSpace=THREE.SRGBColorSpace;
+      tex.magFilter=THREE.NearestFilter;
+      tex.minFilter=THREE.NearestFilter;
+      tex.flipY=false;
+
+      const {root,desc}=loadModel(
+        data,
+        tex
+      );
+
+      modelRoot=root;
+
+      render3D(root);
+
+      animate();
+
+      const geo=data['minecraft:geometry'][0];
+
+      setStatus(
+        `表示完了：${desc.identifier||'Bedrock model'} / ボーン ${geo.bones.length}個 / キューブ ${geo.bones.reduce((n,b)=>n+(b.cubes||[]).length,0)}個`
+      );
+
+    }catch(e){
+
+      setStatus('エラー：'+e.message);
+
+      console.error(e);
+
     }
 
-    setStatus('読み込み中…');
+  }
+);
 
-    const data=JSON.parse(
-      await jf.text()
-    );
+/* =========================================
+   画面サイズ変更
+========================================= */
 
-    const bitmap=await createImageBitmap(pf);
+window.addEventListener(
+  'resize',
+  ()=>{
 
-    // 元の正常なテクスチャ設定を維持
-    const tex=new THREE.CanvasTexture(bitmap);
+    if(!renderer||!camera) return;
 
-    tex.colorSpace=THREE.SRGBColorSpace;
-    tex.magFilter=THREE.NearestFilter;
-    tex.minFilter=THREE.NearestFilter;
-    tex.flipY=false;
+    const w=Math.max(320,canvas.clientWidth);
+    const h=Math.max(300,canvas.clientHeight);
 
-    const {root,desc}=loadModel(data,tex);
+    camera.aspect=w/h;
 
-    modelRoot=root;
+    camera.updateProjectionMatrix();
 
-    const result=setup3D(root);
-
-    animate();
-
-    setStatus(
-      `表示完了：${desc.identifier||'Bedrock model'} / ボーン ${data['minecraft:geometry'][0].bones.length}個`
-    );
-
-  }catch(e){
-
-    setStatus('エラー：'+e.message);
-
-    console.error(e);
+    renderer.setSize(w,h,false);
 
   }
-
-});
-
-/* ==================================================
-   画面サイズ変更
-================================================== */
-
-window.addEventListener('resize',()=>{
-
-  if(!renderer||!camera) return;
-
-  const w=Math.max(320,canvas.clientWidth);
-  const h=Math.max(300,canvas.clientHeight);
-
-  camera.aspect=w/h;
-  camera.updateProjectionMatrix();
-
-  renderer.setSize(w,h,false);
-
-});
+);
 
 </script>
 </body>
