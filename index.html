@@ -1,12 +1,11 @@
 
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MTC 車両 3Dモデルビューア</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MTC Model 3D Viewer</title>
 
-<!-- Three.js の読み込み先を指定 -->
 <script type="importmap">
 {
   "imports": {
@@ -17,127 +16,109 @@
 </script>
 
 <style>
-* {
-  box-sizing: border-box;
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:#101318;
+  color:#eef2f7;
+  font-family:system-ui,-apple-system,sans-serif
 }
-
-body {
-  margin: 0;
-  background: #10151d;
-  color: #f4f6fa;
-  font-family: system-ui, sans-serif;
+header{
+  padding:14px 16px;
+  background:#1b222c;
+  font-weight:700
 }
-
-header {
-  padding: 15px 18px;
-  background: #1c2633;
-  font-weight: 700;
-  font-size: 19px;
+main{
+  padding:14px;
+  max-width:900px;
+  margin:auto
 }
-
-main {
-  max-width: 1000px;
-  margin: auto;
-  padding: 14px;
+.panel{
+  background:#1b222c;
+  border:1px solid #303b49;
+  border-radius:12px;
+  padding:14px;
+  margin-bottom:12px
 }
-
-.panel {
-  background: #1c2633;
-  padding: 14px;
-  border-radius: 13px;
-  margin-bottom: 14px;
+label{
+  display:block;
+  font-size:14px;
+  margin:8px 0 5px;
+  color:#c7d0dc
 }
-
-label {
-  display: block;
-  margin: 10px 0 6px;
+input{
+  width:100%;
+  padding:10px;
+  background:#111820;
+  color:#fff;
+  border:1px solid #465466;
+  border-radius:8px
 }
-
-input {
-  width: 100%;
-  padding: 10px;
-  border-radius: 8px;
-  border: 1px solid #526174;
-  background: #101820;
-  color: white;
+button{
+  border:0;
+  border-radius:9px;
+  background:#4b83e6;
+  color:white;
+  padding:12px 16px;
+  font-weight:700;
+  width:100%;
+  margin-top:12px
 }
-
-button {
-  width: 100%;
-  padding: 13px;
-  margin-top: 12px;
-  border: 0;
-  border-radius: 9px;
-  background: #4b83e6;
-  color: white;
-  font-weight: 700;
-  font-size: 15px;
+#view{
+  width:100%;
+  height:min(65vh,560px);
+  min-height:380px;
+  display:block;
+  background:#dce3ea;
+  border-radius:10px;
+  touch-action:none
 }
-
-#viewer {
-  width: 100%;
-  height: 65vh;
-  min-height: 380px;
-  background: #dce3ea;
-  border-radius: 10px;
-  overflow: hidden;
-  touch-action: none;
+small{
+  color:#aab6c5;
+  line-height:1.6;
+  display:block;
+  margin-top:8px
 }
-
-#status {
-  font-size: 13px;
-  color: #c7d2e0;
-  margin-top: 10px;
-  overflow-wrap: anywhere;
+#status{
+  font-size:13px;
+  color:#b9c8d9;
+  margin-top:8px;
+  overflow-wrap:anywhere
 }
-
-small {
-  color: #aebaca;
-}
-
 </style>
 </head>
 
 <body>
 
-<header>MTC 車両 3Dモデルビューア</header>
+<header>MTC 車両モデル・3Dビューア</header>
 
 <main>
 
 <div class="panel">
 
-<label>Geometry JSON</label>
-<input
-  id="json"
-  type="file"
-  accept=".json,application/json"
->
+<label>Bedrock geometry JSON</label>
+<input id="json" type="file" accept=".json,application/json">
 
-<label>Texture PNG</label>
-<input
-  id="png"
-  type="file"
-  accept="image/png"
->
+<label>テクスチャ PNG</label>
+<input id="png" type="file" accept="image/png">
 
-<button id="load">3Dモデルを表示</button>
+<button id="draw">3Dモデルを読み込む</button>
 
 <div id="status">
 JSONとPNGを選択してください。
 </div>
 
-<br>
-
 <small>
-ドラッグ：回転<br>
+ドラッグ：モデル回転<br>
 ピンチ：拡大・縮小<br>
-マウスホイール：拡大・縮小
+マウスホイール：拡大・縮小<br>
+アニメーションなし
 </small>
 
 </div>
 
 <div class="panel">
-  <div id="viewer"></div>
+<canvas id="view"></canvas>
 </div>
 
 </main>
@@ -149,568 +130,458 @@ import * as THREE from 'three';
 import { OrbitControls } from
 'three/addons/controls/OrbitControls.js';
 
-const $ = id => document.getElementById(id);
+const $=id=>document.getElementById(id);
+const canvas=$('view');
 
-let renderer;
-let scene;
-let camera;
-let controls;
+let renderer,scene,camera,controls;
 let modelRoot;
 let animationId;
 
-const say = text => {
-  $('status').textContent = text;
-};
-
-const rad = n => n * Math.PI / 180;
-
-function applyRotation(obj, rotation) {
-  if (!rotation) return;
-
-  obj.rotation.order = 'ZYX';
-
-  obj.rotation.set(
-    rad(-rotation[0]),
-    rad(-rotation[1]),
-    rad(rotation[2])
-  );
+function setStatus(s){
+  $('status').textContent=s;
 }
 
-/* UV座標 */
-function getUV(face, defaultSize, tw, th) {
+function rad(v){
+  return v*Math.PI/180;
+}
 
-  const p = face.uv || [0, 0];
-  const sz = face.uv_size || defaultSize;
+/* ==================================================
+   元の正常な描画処理：UV変換
+================================================== */
 
-  let points = [
-    [p[0], p[1]],
-    [p[0] + sz[0], p[1]],
-    [p[0] + sz[0], p[1] + sz[1]],
-    [p[0], p[1] + sz[1]]
+function uvRect(face, tw, th){
+  if(!face || !face.uv || !face.uv_size) return null;
+
+  const [u,v]=face.uv;
+  const [w,h]=face.uv_size;
+
+  return [
+    u/tw,
+    1-v/th,
+    (u+w)/tw,
+    1-(v+h)/th
   ];
-
-  const turns =
-    (((face.uv_rotation || 0) / 90) % 4 + 4) % 4;
-
-  for (let i = 0; i < turns; i++) {
-    points = [
-      points[3],
-      points[0],
-      points[1],
-      points[2]
-    ];
-  }
-
-  return points.map(v => [
-    v[0] / tw,
-    1 - v[1] / th
-  ]);
 }
 
-/* 立方体の各面 */
-function faceVertices(x0, y0, z0, x1, y1, z1) {
+/* ==================================================
+   元の正常な描画処理：キューブ生成
+================================================== */
 
-  return {
+function buildCube(cube,boneGroup,texture,tw,th,bonePivot){
 
-    north: [
-      [x0, y1, z0],
-      [x1, y1, z0],
-      [x1, y0, z0],
-      [x0, y0, z0]
-    ],
+  let [sx,sy,sz]=cube.size;
 
-    south: [
-      [x1, y1, z1],
-      [x0, y1, z1],
-      [x0, y0, z1],
-      [x1, y0, z1]
-    ],
+  const eps=0.001;
 
-    east: [
-      [x1, y1, z0],
-      [x1, y1, z1],
-      [x1, y0, z1],
-      [x1, y0, z0]
-    ],
+  const geom=new THREE.BoxGeometry(
+    Math.max(sx,eps),
+    Math.max(sy,eps),
+    Math.max(sz,eps)
+  ).toNonIndexed();
 
-    west: [
-      [x0, y1, z1],
-      [x0, y1, z0],
-      [x0, y0, z0],
-      [x0, y0, z1]
-    ],
-
-    up: [
-      [x0, y1, z0],
-      [x1, y1, z0],
-      [x1, y1, z1],
-      [x0, y1, z1]
-    ],
-
-    down: [
-      [x1, y0, z0],
-      [x0, y0, z0],
-      [x0, y0, z1],
-      [x1, y0, z1]
-    ]
-
-  };
-}
-
-function faceDimensions(name, size) {
-
-  if (name === 'north' || name === 'south') {
-    return [size[0], size[1]];
-  }
-
-  if (name === 'east' || name === 'west') {
-    return [size[2], size[1]];
-  }
-
-  return [size[0], size[2]];
-}
-
-/* キューブ作成 */
-function makeCube(c, tw, th, bonePivot, material) {
-
-  const o = c.origin;
-  const s = c.size;
-  const inf = c.inflate || 0;
-
-  const x0 = o[0] - inf;
-  const y0 = o[1] - inf;
-  const z0 = o[2] - inf;
-
-  const x1 = o[0] + s[0] + inf;
-  const y1 = o[1] + s[1] + inf;
-  const z1 = o[2] + s[2] + inf;
-
-  const verts = faceVertices(
-    x0, y0, z0,
-    x1, y1, z1
+  const pos=cube.origin.map(
+    (v,i)=>v+cube.size[i]/2
   );
 
-  const positions = [];
-  const uvs = [];
-  const indices = [];
-
-  for (const name of [
-    'north',
-    'south',
+  const faces=[
     'east',
     'west',
     'up',
-    'down'
-  ]) {
+    'down',
+    'south',
+    'north'
+  ];
 
-    const face = c.uv?.[name];
+  const groups=geom.groups;
+  const uv=geom.attributes.uv;
 
-    if (!face) continue;
+  // BoxGeometry groups correspond to +X,-X,+Y,-Y,+Z,-Z
+  faces.forEach((name,idx)=>{
 
-    const vertices = verts[name];
-
-    const dimensions = faceDimensions(name, [
-      x1 - x0,
-      y1 - y0,
-      z1 - z0
-    ]);
-
-    if (
-      Math.abs(dimensions[0]) < 1e-10 ||
-      Math.abs(dimensions[1]) < 1e-10
-    ) {
-      continue;
-    }
-
-    const faceUV = getUV(
-      face,
-      dimensions,
+    const rect=uvRect(
+      cube.uv?.[name],
       tw,
       th
     );
 
-    const base = positions.length / 3;
+    if(!rect) return;
 
-    for (let i = 0; i < 4; i++) {
-      positions.push(...vertices[i]);
-      uvs.push(...faceUV[i]);
-    }
+    const group=groups[idx];
 
-    indices.push(
-      base,
-      base + 1,
-      base + 2,
-      base,
-      base + 2,
-      base + 3
-    );
-  }
+    if(!group) return;
 
-  const geometry = new THREE.BufferGeometry();
+    const [u0,v0,u1,v1]=rect;
 
-  geometry.setAttribute(
-    'position',
-    new THREE.Float32BufferAttribute(positions, 3)
-  );
+    for(
+      let j=group.start;
+      j<group.start+group.count;
+      j++
+    ){
 
-  geometry.setAttribute(
-    'uv',
-    new THREE.Float32BufferAttribute(uvs, 2)
-  );
+      const oldU=uv.getX(j);
+      const oldV=uv.getY(j);
 
-  geometry.setIndex(indices);
-
-  geometry.computeVertexNormals();
-
-  const mesh = new THREE.Mesh(
-    geometry,
-    material
-  );
-
-  const bp = new THREE.Vector3(...bonePivot);
-
-  const cp = c.pivot
-    ? new THREE.Vector3(...c.pivot)
-    : new THREE.Vector3(
-        o[0] + s[0] / 2,
-        o[1] + s[1] / 2,
-        o[2] + s[2] / 2
+      // 元のUV変換処理
+      uv.setXY(
+        j,
+        u0+(u1-u0)*oldU,
+        v1+(v0-v1)*oldV
       );
-
-  const center = new THREE.Vector3(
-    o[0] + s[0] / 2,
-    o[1] + s[1] / 2,
-    o[2] + s[2] / 2
-  );
-
-  const group = new THREE.Group();
-
-  group.position.copy(cp.clone().sub(bp));
-
-  applyRotation(group, c.rotation);
-
-  mesh.position.copy(center.sub(cp));
-
-  group.add(mesh);
-
-  return group;
-}
-
-/* モデル構築 */
-function buildModel(data, texture) {
-
-  const gd = data['minecraft:geometry']?.[0];
-
-  if (!gd) {
-    throw new Error(
-      'minecraft:geometry が見つかりません'
-    );
-  }
-
-  const tw =
-    gd.description.texture_width ||
-    texture.image.width;
-
-  const th =
-    gd.description.texture_height ||
-    texture.image.height;
-
-  const material = new THREE.MeshBasicMaterial({
-    map: texture,
-    transparent: true,
-    alphaTest: 0.001,
-    side: THREE.DoubleSide
+    }
   });
 
-  const root = new THREE.Group();
+  uv.needsUpdate=true;
 
-  const boneMap = new Map();
+  const mat=new THREE.MeshBasicMaterial({
+    map:texture,
+    transparent:true,
+    side:THREE.DoubleSide
+  });
 
-  /* ボーン作成 */
-  for (const bone of gd.bones) {
+  const mesh=new THREE.Mesh(geom,mat);
 
-    const group = new THREE.Group();
+  const bp=bonePivot||[0,0,0];
 
-    group.name = bone.name;
+  mesh.position.set(
+    pos[0]-bp[0],
+    pos[1]-bp[1],
+    pos[2]-bp[2]
+  );
 
-    group.userData.pivot = new THREE.Vector3(
-      ...(bone.pivot || [0, 0, 0])
+  if(cube.pivot){
+
+    const p=cube.pivot;
+
+    const wrapper=new THREE.Group();
+
+    wrapper.position.set(
+      p[0]-bp[0],
+      p[1]-bp[1],
+      p[2]-bp[2]
     );
 
-    applyRotation(group, bone.rotation);
+    mesh.position.set(
+      pos[0]-p[0],
+      pos[1]-p[1],
+      pos[2]-p[2]
+    );
 
-    boneMap.set(bone.name, {
+    if(cube.rotation){
+      wrapper.rotation.set(
+        ...cube.rotation.map(rad),
+        'ZYX'
+      );
+    }
+
+    wrapper.add(mesh);
+    boneGroup.add(wrapper);
+
+  }else{
+
+    boneGroup.add(mesh);
+
+  }
+}
+
+/* ==================================================
+   元の正常な描画処理：モデル読み込み
+================================================== */
+
+function loadModel(data,texture){
+
+  const geo=data['minecraft:geometry']?.[0];
+
+  if(!geo){
+    throw Error('minecraft:geometry が見つかりません');
+  }
+
+  const tw=
+    geo.description.texture_width||
+    texture.image.width;
+
+  const th=
+    geo.description.texture_height||
+    texture.image.height;
+
+  const root=new THREE.Group();
+  const map=new Map();
+
+  for(const b of geo.bones){
+
+    const group=new THREE.Group();
+
+    group.name=b.name;
+
+    const pivot=b.pivot||[0,0,0];
+
+    group.userData.pivot=pivot;
+
+    if(b.rotation){
+
+      group.rotation.set(
+        ...b.rotation.map(rad),
+        'ZYX'
+      );
+
+    }
+
+    map.set(b.name,{
       group,
-      bone
+      b
     });
   }
 
-  /* 親子関係 */
-  for (const bone of gd.bones) {
+  for(const b of geo.bones){
 
-    const item = boneMap.get(bone.name);
+    const item=map.get(b.name);
 
-    const group = item.group;
-    const pivot = group.userData.pivot;
+    if(b.parent && map.has(b.parent)){
 
-    if (bone.parent && boneMap.has(bone.parent)) {
+      const parent=map.get(b.parent).group;
 
-      const parent =
-        boneMap.get(bone.parent).group;
+      const pp=parent.userData.pivot||[0,0,0];
+      const cp=item.group.userData.pivot||[0,0,0];
 
-      group.position.copy(
-        pivot.clone().sub(parent.userData.pivot)
+      item.group.position.set(
+        cp[0]-pp[0],
+        cp[1]-pp[1],
+        cp[2]-pp[2]
       );
 
-      parent.add(group);
+      parent.add(item.group);
 
-    } else {
+    }else{
 
-      group.position.copy(pivot);
+      const cp=item.group.userData.pivot||[0,0,0];
 
-      root.add(group);
+      item.group.position.set(...cp);
+
+      root.add(item.group);
+
     }
-  }
 
-  /* キューブ追加 */
-  let cubeCount = 0;
+    for(const cube of b.cubes||[]){
 
-  for (const bone of gd.bones) {
-
-    const group = boneMap.get(bone.name).group;
-
-    const pivot = group.userData.pivot.toArray();
-
-    for (const cube of bone.cubes || []) {
-
-      group.add(
-        makeCube(
-          cube,
-          tw,
-          th,
-          pivot,
-          material
-        )
+      buildCube(
+        cube,
+        item.group,
+        texture,
+        tw,
+        th,
+        item.group.userData.pivot
       );
 
-      cubeCount++;
     }
   }
-
-  root.updateMatrixWorld(true);
 
   return {
     root,
-    bones: gd.bones.length,
-    cubes: cubeCount,
-    id: gd.description.identifier
+    desc:geo.description
   };
 }
 
-/* ビューア初期化 */
-function setupViewer() {
+/* ==================================================
+   ここから3D表示用の追加処理
+================================================== */
 
-  const host = $('viewer');
+function setup3D(root){
 
-  if (renderer) {
-    renderer.dispose();
-    host.innerHTML = '';
+  if(animationId){
+    cancelAnimationFrame(animationId);
+    animationId=null;
   }
 
-  scene = new THREE.Scene();
+  if(controls){
+    controls.dispose();
+    controls=null;
+  }
 
-  scene.background = new THREE.Color(0xdce3ea);
+  if(renderer){
+    renderer.dispose();
+  }
 
-  const width = host.clientWidth;
-  const height = host.clientHeight;
+  const w=Math.max(320,canvas.clientWidth);
+  const h=Math.max(300,canvas.clientHeight);
 
-  camera = new THREE.PerspectiveCamera(
-    38,
-    width / height,
-    0.1,
-    10000
-  );
-
-  renderer = new THREE.WebGLRenderer({
-    antialias: true,
-    alpha: false
+  renderer=new THREE.WebGLRenderer({
+    canvas,
+    antialias:true,
+    alpha:false,
+    preserveDrawingBuffer:true
   });
 
   renderer.setPixelRatio(
-    Math.min(window.devicePixelRatio || 1, 2)
+    Math.min(devicePixelRatio||1,2)
   );
 
-  renderer.setSize(width, height);
+  renderer.setSize(w,h,false);
 
-  host.appendChild(renderer.domElement);
+  renderer.setClearColor(0xe2e8ef,1);
 
-  controls = new OrbitControls(
-    camera,
-    renderer.domElement
-  );
+  scene=new THREE.Scene();
 
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.07;
+  scene.background=new THREE.Color(0xe2e8ef);
 
-  scene.add(
-    new THREE.HemisphereLight(
-      0xffffff,
-      0x8b96a5,
-      2
-    )
-  );
+  scene.add(root);
 
-  const light = new THREE.DirectionalLight(
-    0xffffff,
-    1.2
-  );
+  root.updateMatrixWorld(true);
 
-  light.position.set(200, 300, 400);
+  const box=new THREE.Box3().setFromObject(root);
 
-  scene.add(light);
-}
-
-/* カメラ位置調整 */
-function fitCamera() {
-
-  modelRoot.updateMatrixWorld(true);
-
-  const box = new THREE.Box3().setFromObject(modelRoot);
-
-  if (box.isEmpty()) {
-    throw new Error('モデルの形状がありません');
+  if(box.isEmpty()){
+    throw Error('モデルに表示できる立体がありません');
   }
 
-  const center = box.getCenter(
+  const center=box.getCenter(
     new THREE.Vector3()
   );
 
-  const size = box.getSize(
+  const size=box.getSize(
     new THREE.Vector3()
   );
 
-  const max = Math.max(
+  const maxSize=Math.max(
     size.x,
     size.y,
     size.z
   );
 
-  controls.target.copy(center);
+  const aspect=w/h;
 
-  camera.position.set(
-    center.x + max * 0.9,
-    center.y + max * 0.45,
-    center.z + max * 1.35
+  camera=new THREE.PerspectiveCamera(
+    45,
+    aspect,
+    0.1,
+    Math.max(10000,maxSize*100)
   );
 
-  camera.near = Math.max(0.01, max / 1000);
-  camera.far = max * 20;
+  // 最初は車両の先頭側（Zマイナス方向）から表示
+  const fov=THREE.MathUtils.degToRad(camera.fov);
 
-  camera.updateProjectionMatrix();
+  const distance=
+    (maxSize/2)/Math.tan(fov/2)*1.8;
+
+  camera.position.set(
+    center.x,
+    center.y,
+    center.z-distance
+  );
+
+  camera.up.set(0,1,0);
+  camera.lookAt(center);
+
+  controls=new OrbitControls(
+    camera,
+    canvas
+  );
+
+  controls.target.copy(center);
+
+  controls.enableDamping=true;
+  controls.dampingFactor=0.07;
+
+  controls.enableZoom=true;
+  controls.enableRotate=true;
+  controls.enablePan=true;
+
+  controls.minDistance=Math.max(0.1,maxSize*0.01);
+  controls.maxDistance=maxSize*30;
 
   controls.update();
+
+  return {center,size};
 }
 
-/* 描画ループ */
-function animate() {
+/* ==================================================
+   描画ループ
+================================================== */
 
-  animationId = requestAnimationFrame(animate);
+function animate(){
 
-  if (controls) {
+  animationId=requestAnimationFrame(animate);
+
+  if(controls){
     controls.update();
   }
 
-  if (renderer && scene && camera) {
-    renderer.render(scene, camera);
+  if(renderer && scene && camera){
+    renderer.render(scene,camera);
   }
 }
 
-/* ファイル読み込み */
-$('load').addEventListener('click', async () => {
+/* ==================================================
+   JSON・PNG読み込み
+================================================== */
 
-  try {
+$('draw').addEventListener('click',async()=>{
 
-    const jsonFile = $('json').files[0];
-    const pngFile = $('png').files[0];
+  try{
 
-    if (!jsonFile || !pngFile) {
-      throw new Error(
-        'JSONとPNGを両方選択してください'
+    const jf=$('json').files[0];
+    const pf=$('png').files[0];
+
+    if(!jf||!pf){
+      throw Error(
+        'JSONとPNGの両方を選択してください'
       );
     }
 
-    say('ファイルを読み込み中...');
+    setStatus('読み込み中…');
 
-    const data = JSON.parse(
-      await jsonFile.text()
+    const data=JSON.parse(
+      await jf.text()
     );
 
-    const bitmap = await createImageBitmap(
-      pngFile
-    );
+    const bitmap=await createImageBitmap(pf);
 
-    const texture = new THREE.CanvasTexture(
-      bitmap
-    );
+    // 元の正常なテクスチャ設定を維持
+    const tex=new THREE.CanvasTexture(bitmap);
 
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.flipY = true;
+    tex.colorSpace=THREE.SRGBColorSpace;
+    tex.magFilter=THREE.NearestFilter;
+    tex.minFilter=THREE.NearestFilter;
+    tex.flipY=false;
 
-    texture.magFilter = THREE.NearestFilter;
-    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    const {root,desc}=loadModel(data,tex);
 
-    texture.generateMipmaps = true;
+    modelRoot=root;
 
-    const built = buildModel(data, texture);
-
-    if (animationId) {
-      cancelAnimationFrame(animationId);
-      animationId = null;
-    }
-
-    setupViewer();
-
-    modelRoot = built.root;
-
-    scene.add(modelRoot);
-
-    fitCamera();
+    const result=setup3D(root);
 
     animate();
 
-    say(
-      `表示中：${built.id} / ボーン ${built.bones} / キューブ ${built.cubes}`
+    setStatus(
+      `表示完了：${desc.identifier||'Bedrock model'} / ボーン ${data['minecraft:geometry'][0].bones.length}個`
     );
 
-  } catch (error) {
+  }catch(e){
 
-    console.error(error);
+    setStatus('エラー：'+e.message);
 
-    say('エラー：' + error.message);
+    console.error(e);
+
   }
 
 });
 
-/* 画面サイズ変更 */
-window.addEventListener('resize', () => {
+/* ==================================================
+   画面サイズ変更
+================================================== */
 
-  if (!renderer || !camera) return;
+window.addEventListener('resize',()=>{
 
-  const host = $('viewer');
+  if(!renderer||!camera) return;
 
-  camera.aspect =
-    host.clientWidth / host.clientHeight;
+  const w=Math.max(320,canvas.clientWidth);
+  const h=Math.max(300,canvas.clientHeight);
 
+  camera.aspect=w/h;
   camera.updateProjectionMatrix();
 
-  renderer.setSize(
-    host.clientWidth,
-    host.clientHeight
-  );
+  renderer.setSize(w,h,false);
 
 });
 
 </script>
-
 </body>
 </html>
