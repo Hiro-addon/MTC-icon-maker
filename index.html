@@ -130,280 +130,88 @@ import * as THREE from 'three';
 import { OrbitControls } from
 'three/addons/controls/OrbitControls.js';
 
-const $=id=>document.getElementById(id);
-const canvas=$('view');
+const $=id=>document.getElementById(id), canvas=$('view');
 
-let renderer,scene,camera,controls;
-let modelRoot;
+let renderer, scene, camera, controls;
 let animationId;
 
 function setStatus(s){
-  $('status').textContent=s;
+  $('status').textContent=s
 }
 
 function rad(v){
-  return v*Math.PI/180;
+  return v*Math.PI/180
 }
 
-/* =========================================
-   元の正常なUV処理
-========================================= */
+/* ==========================================
+   以下3つは元の正常なHTMLからそのまま維持
+========================================== */
 
 function uvRect(face, tw, th){
-
-  if(!face || !face.uv || !face.uv_size) {
-    return null;
-  }
-
-  const [u,v]=face.uv;
-  const [w,h]=face.uv_size;
-
-  return [
-    u/tw,
-    1-v/th,
-    (u+w)/tw,
-    1-(v+h)/th
-  ];
+  if(!face || !face.uv || !face.uv_size) return null;
+  const [u,v]=face.uv,[w,h]=face.uv_size;
+  return [u/tw,1-v/th, (u+w)/tw,1-(v+h)/th];
 }
 
-/* =========================================
-   元の正常なキューブ生成処理
-========================================= */
-
-function buildCube(
-  cube,
-  boneGroup,
-  texture,
-  tw,
-  th,
-  bonePivot
-){
-
+function buildCube(cube,boneGroup,texture,tw,th,bonePivot){
   let [sx,sy,sz]=cube.size;
-
   const eps=0.001;
-
-  const geom=new THREE.BoxGeometry(
-    Math.max(sx,eps),
-    Math.max(sy,eps),
-    Math.max(sz,eps)
-  ).toNonIndexed();
-
-  const pos=cube.origin.map(
-    (v,i)=>v+cube.size[i]/2
-  );
-
-  const faces=[
-    'east',
-    'west',
-    'up',
-    'down',
-    'south',
-    'north'
-  ];
-
+  const geom=new THREE.BoxGeometry(Math.max(sx,eps),Math.max(sy,eps),Math.max(sz,eps)).toNonIndexed();
+  const pos=cube.origin.map((v,i)=>v+cube.size[i]/2);
+  const faces=['east','west','up','down','south','north'];
   const groups=geom.groups;
   const uv=geom.attributes.uv;
-
-  // 元のBoxGeometry面順序をそのまま使用
+  // BoxGeometry groups correspond to +X,-X,+Y,-Y,+Z,-Z
   faces.forEach((name,idx)=>{
-
-    const rect=uvRect(
-      cube.uv?.[name],
-      tw,
-      th
-    );
-
+    const rect=uvRect(cube.uv?.[name],tw,th);
     if(!rect) return;
-
-    const group=groups[idx];
-
-    if(!group) return;
-
+    const group=groups[idx]; if(!group) return;
     const [u0,v0,u1,v1]=rect;
-
-    for(
-      let j=group.start;
-      j<group.start+group.count;
-      j++
-    ){
-
-      const oldU=uv.getX(j);
-      const oldV=uv.getY(j);
-
-      // 元のUV変換を維持
-      uv.setXY(
-        j,
-        u0+(u1-u0)*oldU,
-        v1+(v0-v1)*oldV
-      );
-
+    for(let j=group.start;j<group.start+group.count;j++){
+      const oldU=uv.getX(j), oldV=uv.getY(j);
+      // Bedrock face UV is top-left based. Keep flips from negative uv_size.
+      uv.setXY(j,u0+(u1-u0)*oldU,v1+(v0-v1)*oldV);
     }
-
   });
-
   uv.needsUpdate=true;
-
-  const mat=new THREE.MeshBasicMaterial({
-    map:texture,
-    transparent:true,
-    side:THREE.DoubleSide
-  });
-
+  const mat=new THREE.MeshBasicMaterial({map:texture,transparent:true,side:THREE.DoubleSide});
   const mesh=new THREE.Mesh(geom,mat);
-
   const bp=bonePivot||[0,0,0];
-
-  mesh.position.set(
-    pos[0]-bp[0],
-    pos[1]-bp[1],
-    pos[2]-bp[2]
-  );
-
+  mesh.position.set(pos[0]-bp[0],pos[1]-bp[1],pos[2]-bp[2]);
   if(cube.pivot){
-
     const p=cube.pivot;
-
-    const wrapper=new THREE.Group();
-
-    wrapper.position.set(
-      p[0]-bp[0],
-      p[1]-bp[1],
-      p[2]-bp[2]
-    );
-
-    mesh.position.set(
-      pos[0]-p[0],
-      pos[1]-p[1],
-      pos[2]-p[2]
-    );
-
-    if(cube.rotation){
-
-      wrapper.rotation.set(
-        ...cube.rotation.map(rad),
-        'ZYX'
-      );
-
-    }
-
-    wrapper.add(mesh);
-    boneGroup.add(wrapper);
-
-  }else{
-
-    boneGroup.add(mesh);
-
-  }
-
+    const wrapper=new THREE.Group(); wrapper.position.set(p[0]-bp[0],p[1]-bp[1],p[2]-bp[2]);
+    mesh.position.set(pos[0]-p[0],pos[1]-p[1],pos[2]-p[2]);
+    if(cube.rotation) wrapper.rotation.set(...cube.rotation.map(rad),'ZYX');
+    wrapper.add(mesh); boneGroup.add(wrapper);
+  }else boneGroup.add(mesh);
 }
-
-/* =========================================
-   元の正常なモデル読み込み処理
-========================================= */
 
 function loadModel(data,texture){
-
-  const geo=data['minecraft:geometry']?.[0];
-
-  if(!geo){
-    throw Error(
-      'minecraft:geometry が見つかりません'
-    );
-  }
-
-  const tw=
-    geo.description.texture_width||
-    texture.image.width;
-
-  const th=
-    geo.description.texture_height||
-    texture.image.height;
-
-  const root=new THREE.Group();
-  const map=new Map();
-
+  const geo=data['minecraft:geometry']?.[0]; if(!geo) throw Error('minecraft:geometry が見つかりません');
+  const tw=geo.description.texture_width||texture.image.width, th=geo.description.texture_height||texture.image.height;
+  const root=new THREE.Group(), map=new Map();
   for(const b of geo.bones){
-
-    const group=new THREE.Group();
-
-    group.name=b.name;
-
-    const pivot=b.pivot||[0,0,0];
-
-    group.userData.pivot=pivot;
-
-    if(b.rotation){
-
-      group.rotation.set(
-        ...b.rotation.map(rad),
-        'ZYX'
-      );
-
-    }
-
-    map.set(b.name,{
-      group,
-      b
-    });
-
+    const group=new THREE.Group(); group.name=b.name;
+    const pivot=b.pivot||[0,0,0]; group.userData.pivot=pivot;
+    if(b.rotation) group.rotation.set(...b.rotation.map(rad),'ZYX');
+    map.set(b.name,{group,b});
   }
-
   for(const b of geo.bones){
-
     const item=map.get(b.name);
-
-    if(b.parent && map.has(b.parent)){
-
-      const parent=map.get(b.parent).group;
-
-      const pp=parent.userData.pivot||[0,0,0];
-      const cp=item.group.userData.pivot||[0,0,0];
-
-      item.group.position.set(
-        cp[0]-pp[0],
-        cp[1]-pp[1],
-        cp[2]-pp[2]
-      );
-
-      parent.add(item.group);
-
-    }else{
-
-      const cp=item.group.userData.pivot||[0,0,0];
-
-      item.group.position.set(...cp);
-
-      root.add(item.group);
-
-    }
-
-    for(const cube of b.cubes||[]){
-
-      buildCube(
-        cube,
-        item.group,
-        texture,
-        tw,
-        th,
-        item.group.userData.pivot
-      );
-
-    }
-
+    if(b.parent && map.has(b.parent)) {
+      const parent=map.get(b.parent).group, pp=parent.userData.pivot||[0,0,0], cp=item.group.userData.pivot||[0,0,0];
+      item.group.position.set(cp[0]-pp[0],cp[1]-pp[1],cp[2]-pp[2]); parent.add(item.group);
+    } else { const cp=item.group.userData.pivot||[0,0,0]; item.group.position.set(...cp); root.add(item.group); }
+    for(const cube of b.cubes||[]) buildCube(cube,item.group,texture,tw,th,item.group.userData.pivot);
   }
-
-  return {
-    root,
-    desc:geo.description
-  };
-
+  return {root,desc:geo.description};
 }
 
-/* =========================================
-   3Dカメラ
-   元のrenderFront()を置き換える部分
-========================================= */
+/* ==========================================
+   ここから3D表示用
+   元のrenderFront()を置き換え
+========================================== */
 
 function render3D(root){
 
@@ -436,57 +244,41 @@ function render3D(root){
   );
 
   renderer.setSize(w,h,false);
-
   renderer.setClearColor(0xe2e8ef,1);
 
   scene=new THREE.Scene();
-
   scene.background=new THREE.Color(0xe2e8ef);
 
   scene.add(root);
-
   root.updateMatrixWorld(true);
 
   const box=new THREE.Box3().setFromObject(root);
 
   if(box.isEmpty()){
-    throw Error(
-      'モデルに表示できる立体がありません'
-    );
+    throw Error('モデルに表示できる立体がありません');
   }
 
-  const center=box.getCenter(
-    new THREE.Vector3()
-  );
-
-  const size=box.getSize(
-    new THREE.Vector3()
-  );
-
-  const sphere=box.getBoundingSphere(
-    new THREE.Sphere()
-  );
+  const center=box.getCenter(new THREE.Vector3());
+  const sphere=box.getBoundingSphere(new THREE.Sphere());
 
   const radius=Math.max(sphere.radius,1);
 
   camera=new THREE.PerspectiveCamera(
     40,
     w/h,
-    0.1,
+    Math.max(0.01,radius/1000),
     radius*100
   );
 
-  // 車両の長さ方向を見渡せる斜め方向から開始
+  // 最初の視点。車両の先頭側を含む斜め方向
   const direction=new THREE.Vector3(
-    1.8,
-    1.25,
-    -0.35
+    1.5,
+    1.0,
+    -1.5
   ).normalize();
 
   const distance=
-    radius/Math.sin(
-      THREE.MathUtils.degToRad(camera.fov/2)
-    )*1.2;
+    radius/Math.sin(THREE.MathUtils.degToRad(camera.fov/2))*1.25;
 
   camera.position.copy(
     center.clone().add(
@@ -497,34 +289,25 @@ function render3D(root){
   camera.up.set(0,1,0);
   camera.lookAt(center);
 
-  controls=new OrbitControls(
-    camera,
-    canvas
-  );
+  controls=new OrbitControls(camera,canvas);
 
   controls.target.copy(center);
-
   controls.enableDamping=true;
   controls.dampingFactor=0.07;
 
-  controls.enableZoom=true;
   controls.enableRotate=true;
+  controls.enableZoom=true;
   controls.enablePan=true;
 
-  controls.minDistance=Math.max(
-    0.1,
-    radius*0.01
-  );
-
-  controls.maxDistance=radius*20;
+  controls.minDistance=Math.max(0.1,radius*0.005);
+  controls.maxDistance=radius*30;
 
   controls.update();
-
 }
 
-/* =========================================
+/* ==========================================
    描画ループ
-========================================= */
+========================================== */
 
 function animate(){
 
@@ -537,95 +320,72 @@ function animate(){
   if(renderer && scene && camera){
     renderer.render(scene,camera);
   }
-
 }
 
-/* =========================================
+/* ==========================================
    ファイル読み込み
-========================================= */
+========================================== */
 
-$('draw').addEventListener(
-  'click',
-  async()=>{
+$('draw').addEventListener('click',async()=>{
+ try{
+  const jf=$('json').files[0],pf=$('png').files[0];
 
-    try{
-
-      const jf=$('json').files[0];
-      const pf=$('png').files[0];
-
-      if(!jf||!pf){
-
-        throw Error(
-          'JSONとPNGの両方を選択してください'
-        );
-
-      }
-
-      setStatus('読み込み中…');
-
-      const data=JSON.parse(
-        await jf.text()
-      );
-
-      const bitmap=await createImageBitmap(pf);
-
-      // 元の正常なテクスチャ設定を維持
-      const tex=new THREE.CanvasTexture(bitmap);
-
-      tex.colorSpace=THREE.SRGBColorSpace;
-      tex.magFilter=THREE.NearestFilter;
-      tex.minFilter=THREE.NearestFilter;
-      tex.flipY=false;
-
-      const {root,desc}=loadModel(
-        data,
-        tex
-      );
-
-      modelRoot=root;
-
-      render3D(root);
-
-      animate();
-
-      const geo=data['minecraft:geometry'][0];
-
-      setStatus(
-        `表示完了：${desc.identifier||'Bedrock model'} / ボーン ${geo.bones.length}個 / キューブ ${geo.bones.reduce((n,b)=>n+(b.cubes||[]).length,0)}個`
-      );
-
-    }catch(e){
-
-      setStatus('エラー：'+e.message);
-
-      console.error(e);
-
-    }
-
+  if(!jf||!pf){
+    throw Error('JSONとPNGの両方を選択してください');
   }
-);
 
-/* =========================================
+  setStatus('読み込み中…');
+
+  const data=JSON.parse(await jf.text());
+
+  const bitmap=await createImageBitmap(pf);
+
+  // 元のテクスチャ設定を維持
+  const tex=new THREE.CanvasTexture(bitmap);
+  tex.colorSpace=THREE.SRGBColorSpace;
+  tex.magFilter=THREE.NearestFilter;
+  tex.minFilter=THREE.NearestFilter;
+  tex.flipY=false;
+
+  const {root,desc}=loadModel(data,tex);
+
+  render3D(root);
+  animate();
+
+  const geo=data['minecraft:geometry'][0];
+
+  const cubeCount=geo.bones.reduce(
+    (n,b)=>n+(b.cubes||[]).length,
+    0
+  );
+
+  setStatus(
+    `表示完了：${desc.identifier||'Bedrock model'} / ボーン ${geo.bones.length}個 / キューブ ${cubeCount}個`
+  );
+
+ }catch(e){
+  setStatus('エラー：'+e.message);
+  console.error(e);
+ }
+});
+
+/* ==========================================
    画面サイズ変更
-========================================= */
+========================================== */
 
-window.addEventListener(
-  'resize',
-  ()=>{
+window.addEventListener('resize',()=>{
 
-    if(!renderer||!camera) return;
+  if(!renderer||!camera) return;
 
-    const w=Math.max(320,canvas.clientWidth);
-    const h=Math.max(300,canvas.clientHeight);
+  const w=Math.max(320,canvas.clientWidth);
+  const h=Math.max(300,canvas.clientHeight);
 
-    camera.aspect=w/h;
+  camera.aspect=w/h;
+  camera.updateProjectionMatrix();
 
-    camera.updateProjectionMatrix();
+  renderer.setSize(w,h,false);
 
-    renderer.setSize(w,h,false);
-
-  }
-);
+});
 
 </script>
 </body>
