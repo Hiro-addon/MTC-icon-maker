@@ -1,9 +1,20 @@
+
 <!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MTC 車両 3Dモデルビューア</title>
+
+<!-- Three.js の読み込み先を指定 -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
 
 <style>
 * {
@@ -60,6 +71,7 @@ button {
   background: #4b83e6;
   color: white;
   font-weight: 700;
+  font-size: 15px;
 }
 
 #viewer {
@@ -69,17 +81,20 @@ button {
   background: #dce3ea;
   border-radius: 10px;
   overflow: hidden;
+  touch-action: none;
 }
 
 #status {
   font-size: 13px;
   color: #c7d2e0;
   margin-top: 10px;
+  overflow-wrap: anywhere;
 }
 
 small {
   color: #aebaca;
 }
+
 </style>
 </head>
 
@@ -92,10 +107,18 @@ small {
 <div class="panel">
 
 <label>Geometry JSON</label>
-<input id="json" type="file" accept=".json,application/json">
+<input
+  id="json"
+  type="file"
+  accept=".json,application/json"
+>
 
 <label>Texture PNG</label>
-<input id="png" type="file" accept="image/png">
+<input
+  id="png"
+  type="file"
+  accept="image/png"
+>
 
 <button id="load">3Dモデルを表示</button>
 
@@ -103,8 +126,12 @@ small {
 JSONとPNGを選択してください。
 </div>
 
+<br>
+
 <small>
-表示後はドラッグで回転、ピンチ／ホイールで拡大縮小できます。
+ドラッグ：回転<br>
+ピンチ：拡大・縮小<br>
+マウスホイール：拡大・縮小
 </small>
 
 </div>
@@ -117,11 +144,10 @@ JSONとPNGを選択してください。
 
 <script type="module">
 
-import * as THREE from
-'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+import * as THREE from 'three';
 
 import { OrbitControls } from
-'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+'three/addons/controls/OrbitControls.js';
 
 const $ = id => document.getElementById(id);
 
@@ -130,31 +156,33 @@ let scene;
 let camera;
 let controls;
 let modelRoot;
+let animationId;
 
-const say = s => {
-  $('status').textContent = s;
+const say = text => {
+  $('status').textContent = text;
 };
 
 const rad = n => n * Math.PI / 180;
 
-function euler(obj, r) {
-  if (!r) return;
+function applyRotation(obj, rotation) {
+  if (!rotation) return;
 
-  obj.rotation.order = 'XYZ';
+  obj.rotation.order = 'ZYX';
 
   obj.rotation.set(
-    rad(r[0]),
-    rad(r[1]),
-    rad(r[2])
+    rad(-rotation[0]),
+    rad(-rotation[1]),
+    rad(rotation[2])
   );
 }
 
-function uvPoints(face, defaultSize, tw, th) {
+/* UV座標 */
+function getUV(face, defaultSize, tw, th) {
 
   const p = face.uv || [0, 0];
   const sz = face.uv_size || defaultSize;
 
-  let a = [
+  let points = [
     [p[0], p[1]],
     [p[0] + sz[0], p[1]],
     [p[0] + sz[0], p[1] + sz[1]],
@@ -164,16 +192,22 @@ function uvPoints(face, defaultSize, tw, th) {
   const turns =
     (((face.uv_rotation || 0) / 90) % 4 + 4) % 4;
 
-  for (let n = 0; n < turns; n++) {
-    a = [a[3], a[0], a[1], a[2]];
+  for (let i = 0; i < turns; i++) {
+    points = [
+      points[3],
+      points[0],
+      points[1],
+      points[2]
+    ];
   }
 
-  return a.map(v => [
+  return points.map(v => [
     v[0] / tw,
     1 - v[1] / th
   ]);
 }
 
+/* 立方体の各面 */
 function faceVertices(x0, y0, z0, x1, y1, z1) {
 
   return {
@@ -223,19 +257,20 @@ function faceVertices(x0, y0, z0, x1, y1, z1) {
   };
 }
 
-function faceDims(name, s) {
+function faceDimensions(name, size) {
 
   if (name === 'north' || name === 'south') {
-    return [s[0], s[1]];
+    return [size[0], size[1]];
   }
 
   if (name === 'east' || name === 'west') {
-    return [s[2], s[1]];
+    return [size[2], size[1]];
   }
 
-  return [s[0], s[2]];
+  return [size[0], size[2]];
 }
 
+/* キューブ作成 */
 function makeCube(c, tw, th, bonePivot, material) {
 
   const o = c.origin;
@@ -255,9 +290,9 @@ function makeCube(c, tw, th, bonePivot, material) {
     x1, y1, z1
   );
 
-  const pos = [];
+  const positions = [];
   const uvs = [];
-  const idx = [];
+  const indices = [];
 
   for (const name of [
     'north',
@@ -268,32 +303,40 @@ function makeCube(c, tw, th, bonePivot, material) {
     'down'
   ]) {
 
-    const f = c.uv?.[name];
+    const face = c.uv?.[name];
 
-    if (!f) continue;
+    if (!face) continue;
 
-    const v = verts[name];
+    const vertices = verts[name];
 
-    const dim = faceDims(name, [
+    const dimensions = faceDimensions(name, [
       x1 - x0,
       y1 - y0,
       z1 - z0
     ]);
 
-    if (Math.abs(dim[0] * dim[1]) < 1e-10) {
+    if (
+      Math.abs(dimensions[0]) < 1e-10 ||
+      Math.abs(dimensions[1]) < 1e-10
+    ) {
       continue;
     }
 
-    const tex = uvPoints(f, dim, tw, th);
+    const faceUV = getUV(
+      face,
+      dimensions,
+      tw,
+      th
+    );
 
-    const base = pos.length / 3;
+    const base = positions.length / 3;
 
     for (let i = 0; i < 4; i++) {
-      pos.push(...v[i]);
-      uvs.push(...tex[i]);
+      positions.push(...vertices[i]);
+      uvs.push(...faceUV[i]);
     }
 
-    idx.push(
+    indices.push(
       base,
       base + 1,
       base + 2,
@@ -303,22 +346,26 @@ function makeCube(c, tw, th, bonePivot, material) {
     );
   }
 
-  const geo = new THREE.BufferGeometry();
+  const geometry = new THREE.BufferGeometry();
 
-  geo.setAttribute(
+  geometry.setAttribute(
     'position',
-    new THREE.Float32BufferAttribute(pos, 3)
+    new THREE.Float32BufferAttribute(positions, 3)
   );
 
-  geo.setAttribute(
+  geometry.setAttribute(
     'uv',
     new THREE.Float32BufferAttribute(uvs, 2)
   );
 
-  geo.setIndex(idx);
-  geo.computeVertexNormals();
+  geometry.setIndex(indices);
 
-  const mesh = new THREE.Mesh(geo, material);
+  geometry.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(
+    geometry,
+    material
+  );
 
   const bp = new THREE.Vector3(...bonePivot);
 
@@ -336,25 +383,28 @@ function makeCube(c, tw, th, bonePivot, material) {
     o[2] + s[2] / 2
   );
 
-  const g = new THREE.Group();
+  const group = new THREE.Group();
 
-  g.position.copy(cp.clone().sub(bp));
+  group.position.copy(cp.clone().sub(bp));
 
-  euler(g, c.rotation);
+  applyRotation(group, c.rotation);
 
   mesh.position.copy(center.sub(cp));
 
-  g.add(mesh);
+  group.add(mesh);
 
-  return g;
+  return group;
 }
 
-function build(data, texture) {
+/* モデル構築 */
+function buildModel(data, texture) {
 
   const gd = data['minecraft:geometry']?.[0];
 
   if (!gd) {
-    throw Error('minecraft:geometry が見つかりません');
+    throw new Error(
+      'minecraft:geometry が見つかりません'
+    );
   }
 
   const tw =
@@ -374,65 +424,76 @@ function build(data, texture) {
 
   const root = new THREE.Group();
 
-  const map = new Map();
+  const boneMap = new Map();
 
-  for (const b of gd.bones) {
+  /* ボーン作成 */
+  for (const bone of gd.bones) {
 
-    const g = new THREE.Group();
+    const group = new THREE.Group();
 
-    g.name = b.name;
+    group.name = bone.name;
 
-    g.userData.pivot = new THREE.Vector3(
-      ...(b.pivot || [0, 0, 0])
+    group.userData.pivot = new THREE.Vector3(
+      ...(bone.pivot || [0, 0, 0])
     );
 
-    euler(g, b.rotation);
+    applyRotation(group, bone.rotation);
 
-    map.set(b.name, {
-      g,
-      b
+    boneMap.set(bone.name, {
+      group,
+      bone
     });
   }
 
-  for (const b of gd.bones) {
+  /* 親子関係 */
+  for (const bone of gd.bones) {
 
-    const item = map.get(b.name);
-    const g = item.g;
-    const p = g.userData.pivot;
+    const item = boneMap.get(bone.name);
 
-    if (b.parent && map.has(b.parent)) {
+    const group = item.group;
+    const pivot = group.userData.pivot;
 
-      const pg = map.get(b.parent).g;
+    if (bone.parent && boneMap.has(bone.parent)) {
 
-      g.position.copy(
-        p.clone().sub(pg.userData.pivot)
+      const parent =
+        boneMap.get(bone.parent).group;
+
+      group.position.copy(
+        pivot.clone().sub(parent.userData.pivot)
       );
 
-      pg.add(g);
+      parent.add(group);
 
     } else {
 
-      g.position.copy(p);
+      group.position.copy(pivot);
 
-      root.add(g);
+      root.add(group);
     }
   }
 
-  let cubes = 0;
+  /* キューブ追加 */
+  let cubeCount = 0;
 
-  for (const b of gd.bones) {
+  for (const bone of gd.bones) {
 
-    const g = map.get(b.name).g;
+    const group = boneMap.get(bone.name).group;
 
-    const p = g.userData.pivot.toArray();
+    const pivot = group.userData.pivot.toArray();
 
-    for (const c of b.cubes || []) {
+    for (const cube of bone.cubes || []) {
 
-      g.add(
-        makeCube(c, tw, th, p, material)
+      group.add(
+        makeCube(
+          cube,
+          tw,
+          th,
+          pivot,
+          material
+        )
       );
 
-      cubes++;
+      cubeCount++;
     }
   }
 
@@ -441,11 +502,12 @@ function build(data, texture) {
   return {
     root,
     bones: gd.bones.length,
-    cubes,
+    cubes: cubeCount,
     id: gd.description.identifier
   };
 }
 
+/* ビューア初期化 */
 function setupViewer() {
 
   const host = $('viewer');
@@ -459,12 +521,12 @@ function setupViewer() {
 
   scene.background = new THREE.Color(0xdce3ea);
 
-  const w = host.clientWidth;
-  const h = host.clientHeight;
+  const width = host.clientWidth;
+  const height = host.clientHeight;
 
   camera = new THREE.PerspectiveCamera(
     38,
-    w / h,
+    width / height,
     0.1,
     10000
   );
@@ -475,10 +537,10 @@ function setupViewer() {
   });
 
   renderer.setPixelRatio(
-    Math.min(devicePixelRatio || 1, 2)
+    Math.min(window.devicePixelRatio || 1, 2)
   );
 
-  renderer.setSize(w, h);
+  renderer.setSize(width, height);
 
   host.appendChild(renderer.domElement);
 
@@ -508,19 +570,24 @@ function setupViewer() {
   scene.add(light);
 }
 
-function fit() {
+/* カメラ位置調整 */
+function fitCamera() {
 
   modelRoot.updateMatrixWorld(true);
 
   const box = new THREE.Box3().setFromObject(modelRoot);
 
   if (box.isEmpty()) {
-    throw Error('モデルの形状がありません');
+    throw new Error('モデルの形状がありません');
   }
 
-  const center = box.getCenter(new THREE.Vector3());
+  const center = box.getCenter(
+    new THREE.Vector3()
+  );
 
-  const size = box.getSize(new THREE.Vector3());
+  const size = box.getSize(
+    new THREE.Vector3()
+  );
 
   const max = Math.max(
     size.x,
@@ -544,8 +611,7 @@ function fit() {
   controls.update();
 }
 
-let animationId;
-
+/* 描画ループ */
 function animate() {
 
   animationId = requestAnimationFrame(animate);
@@ -559,36 +625,47 @@ function animate() {
   }
 }
 
+/* ファイル読み込み */
 $('load').addEventListener('click', async () => {
 
   try {
 
-    const jf = $('json').files[0];
-    const pf = $('png').files[0];
+    const jsonFile = $('json').files[0];
+    const pngFile = $('png').files[0];
 
-    if (!jf || !pf) {
-      throw Error('JSONとPNGを両方選択してください');
+    if (!jsonFile || !pngFile) {
+      throw new Error(
+        'JSONとPNGを両方選択してください'
+      );
     }
 
     say('ファイルを読み込み中...');
 
-    const data = JSON.parse(await jf.text());
+    const data = JSON.parse(
+      await jsonFile.text()
+    );
 
-    const bitmap = await createImageBitmap(pf);
+    const bitmap = await createImageBitmap(
+      pngFile
+    );
 
-    const texture = new THREE.CanvasTexture(bitmap);
+    const texture = new THREE.CanvasTexture(
+      bitmap
+    );
 
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.flipY = true;
 
     texture.magFilter = THREE.NearestFilter;
     texture.minFilter = THREE.LinearMipmapLinearFilter;
+
     texture.generateMipmaps = true;
 
-    const built = build(data, texture);
+    const built = buildModel(data, texture);
 
-    if (modelRoot && scene) {
-      scene.remove(modelRoot);
+    if (animationId) {
+      cancelAnimationFrame(animationId);
+      animationId = null;
     }
 
     setupViewer();
@@ -597,28 +674,27 @@ $('load').addEventListener('click', async () => {
 
     scene.add(modelRoot);
 
-    fit();
+    fitCamera();
 
-    if (!animationId) {
-      animate();
-    }
+    animate();
 
     say(
       `表示中：${built.id} / ボーン ${built.bones} / キューブ ${built.cubes}`
     );
 
-  } catch (e) {
+  } catch (error) {
 
-    console.error(e);
+    console.error(error);
 
-    say('エラー：' + e.message);
+    say('エラー：' + error.message);
   }
 
 });
 
+/* 画面サイズ変更 */
 window.addEventListener('resize', () => {
 
-  if (!renderer) return;
+  if (!renderer || !camera) return;
 
   const host = $('viewer');
 
@@ -635,5 +711,6 @@ window.addEventListener('resize', () => {
 });
 
 </script>
+
 </body>
 </html>
